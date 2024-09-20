@@ -11,8 +11,8 @@ import os
 class Board:
     def __init__(self, size=15):
         self.size = size
-        self.board = np.zeros((size, size), dtype=int)  # 0-empty, 1-player1, 2-player2
-        self.center = size // 2
+        self.board = np.zeros((self.size, self.size), dtype=int)  # 0-empty, 1-player1, 2-player2
+        self.center = self.size // 2
 
     def reset(self):
         self.board = np.zeros((self.size, self.size), dtype=int)
@@ -285,13 +285,42 @@ class GomokuGame:
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        tk.Label(self.root, text="Welcome to Gomoku", font=("Helvetica", 16)).pack(pady=20)
-        tk.Button(self.root, text="Play against AI", command=self.start_game_vs_ai, width=20).pack(pady=10)
-        tk.Button(self.root, text="Self Training", command=self.start_self_training, width=20).pack(pady=10)
+        self.root.geometry("800x600")  # Set window size
+
+        # Create a frame to center the content
+        frame = tk.Frame(self.root)
+        frame.pack(expand=True)
+
+        tk.Label(frame, text="Welcome to Gomoku", font=("Helvetica", 24)).pack(pady=40)
+        tk.Button(frame, text="Play against AI", command=self.play_vs_ai_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
+        tk.Button(frame, text="Self Training", command=self.start_self_training, width=20, font=("Helvetica", 16)).pack(pady=20)
+
+    def play_vs_ai_menu(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        self.root.geometry("800x600")  # Set window size
+
+        frame = tk.Frame(self.root)
+        frame.pack(expand=True)
+
+        tk.Label(frame, text="Enter board size (default 30):", font=("Helvetica", 16)).pack(pady=20)
+        self.board_size_entry_ai = tk.Entry(frame, font=("Helvetica", 16))
+        self.board_size_entry_ai.insert(0, "30")
+        self.board_size_entry_ai.pack(pady=10)
+        tk.Button(frame, text="Start Game", command=self.start_game_vs_ai, width=20, font=("Helvetica", 16)).pack(pady=20)
+        tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
 
     def start_game_vs_ai(self):
+        try:
+            board_size = int(self.board_size_entry_ai.get())
+            if board_size < 5 or board_size > 50:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter a valid board size between 5 and 50.")
+            return
         self.player_number = random.choice([1, 2])
-        self.board = Board(size=15)  # You can change the board size here
+        self.board = Board(size=board_size)
         self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1, board_size=self.board.size)
         self.ai_player.load_weights()
         self.draw_board()
@@ -301,20 +330,29 @@ class GomokuGame:
     def start_self_training(self):
         for widget in self.root.winfo_children():
             widget.destroy()
-        tk.Label(self.root, text="Enter number of games for self-training:", font=("Helvetica", 12)).pack(pady=10)
-        self.num_games_entry = tk.Entry(self.root)
-        self.num_games_entry.pack(pady=5)
-        tk.Label(self.root, text="Enter board size (e.g., 15):", font=("Helvetica", 12)).pack(pady=10)
-        self.board_size_entry = tk.Entry(self.root)
-        self.board_size_entry.pack(pady=5)
-        tk.Button(self.root, text="Start Training", command=self.run_self_training).pack(pady=10)
+
+        self.root.geometry("800x600")  # Set window size
+
+        frame = tk.Frame(self.root)
+        frame.pack(expand=True)
+
+        tk.Label(frame, text="Enter number of games for self-training:", font=("Helvetica", 16)).pack(pady=20)
+        self.num_games_entry = tk.Entry(frame, font=("Helvetica", 16))
+        self.num_games_entry.pack(pady=10)
+        tk.Label(frame, text="Enter board size (e.g., 15):", font=("Helvetica", 16)).pack(pady=20)
+        self.board_size_entry = tk.Entry(frame, font=("Helvetica", 16))
+        self.board_size_entry.pack(pady=10)
+        tk.Button(frame, text="Start Training", command=self.run_self_training, width=20, font=("Helvetica", 16)).pack(pady=20)
+        tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
 
     def run_self_training(self):
         try:
             num_games = int(self.num_games_entry.get())
             board_size = int(self.board_size_entry.get())
+            if board_size < 5 or board_size > 50:
+                raise ValueError
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers.")
+            messagebox.showerror("Invalid Input", "Please enter valid numbers. Board size should be between 5 and 50.")
             return
 
         ai_weights_file = 'ai_weights.pkl'
@@ -329,9 +367,9 @@ class GomokuGame:
 
         self.progress_window = tk.Toplevel(self.root)
         self.progress_window.title("Training Progress")
-        tk.Label(self.progress_window, text="Training in progress...").pack(pady=10)
-        self.progress = ttk.Progressbar(self.progress_window, orient=tk.HORIZONTAL, length=300, mode='determinate')
-        self.progress.pack(pady=10)
+        tk.Label(self.progress_window, text="Training in progress...", font=("Helvetica", 16)).pack(pady=20)
+        self.progress = ttk.Progressbar(self.progress_window, orient=tk.HORIZONTAL, length=400, mode='determinate')
+        self.progress.pack(pady=20)
         self.progress['maximum'] = num_games
         self.progress['value'] = 0
 
@@ -346,7 +384,8 @@ class GomokuGame:
             self.results.append(result)
             self.num_completed += 1
             self.progress['value'] = self.num_completed
-            self.progress_window.update()
+            # Update the progress bar
+            self.progress_window.update_idletasks()
             if self.num_completed == num_games:
                 pool.close()
                 pool.join()
@@ -374,6 +413,7 @@ class GomokuGame:
         with open(ai_weights_file, 'wb') as f:
             pickle.dump(ai_player1_weights, f)
 
+        # Close the progress window
         self.progress_window.destroy()
         messagebox.showinfo("Training Completed", f"Self-training of {num_games} games completed.")
         self.main_menu()
@@ -381,13 +421,20 @@ class GomokuGame:
     def draw_board(self):
         for widget in self.root.winfo_children():
             widget.destroy()
-        canvas_size = 600
+
+        self.root.geometry("800x800")  # Adjust window size
+
+        canvas_size = min(800, 20 * self.board.size)
         self.cell_size = canvas_size // self.board.size
         self.canvas = tk.Canvas(self.root, width=canvas_size, height=canvas_size)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self.human_move)
         self.draw_grid()
         self.update_canvas()
+        if self.player_number == 1:
+            self.root.title("Your Turn")
+        else:
+            self.root.title("AI's Turn")
 
     def draw_grid(self):
         for i in range(self.board.size):
@@ -420,8 +467,8 @@ class GomokuGame:
                         fill=color, tags="piece")
 
     def human_move(self, event):
-        x = round((event.x - self.cell_size // 2) / self.cell_size)
-        y = round((event.y - self.cell_size // 2) / self.cell_size)
+        x = int(round((event.x - self.cell_size // 2) / self.cell_size))
+        y = int(round((event.y - self.cell_size // 2) / self.cell_size))
         if 0 <= x < self.board.size and 0 <= y < self.board.size:
             if self.board.make_move(x, y, self.player_number):
                 self.update_canvas()
@@ -430,15 +477,21 @@ class GomokuGame:
                     self.ai_player.save_weights()
                     messagebox.showinfo("Game Over", "You win!")
                     self.main_menu()
+                    return
                 elif self.board.is_full():
                     self.ai_player.adjust_weights(0.5)
                     self.ai_player.save_weights()
                     messagebox.showinfo("Game Over", "It's a draw!")
                     self.main_menu()
+                    return
                 else:
                     self.ai_move()
+        else:
+            messagebox.showwarning("Invalid Move", "Please click within the board.")
 
     def ai_move(self):
+        self.root.title("AI's Turn")
+        self.root.update_idletasks()
         move = self.ai_player.choose_action(self.board)
         if move:
             self.board.make_move(move[1], move[0], self.ai_player.player_number)
@@ -448,16 +501,20 @@ class GomokuGame:
                 self.ai_player.save_weights()
                 messagebox.showinfo("Game Over", "AI wins!")
                 self.main_menu()
+                return
             elif self.board.is_full():
                 self.ai_player.adjust_weights(0.5)
                 self.ai_player.save_weights()
                 messagebox.showinfo("Game Over", "It's a draw!")
                 self.main_menu()
+                return
         else:
             self.ai_player.adjust_weights(0.5)
             self.ai_player.save_weights()
             messagebox.showinfo("Game Over", "It's a draw!")
             self.main_menu()
+            return
+        self.root.title("Your Turn")
 
 def main():
     root = tk.Tk()
