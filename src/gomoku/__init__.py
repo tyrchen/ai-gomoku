@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import pickle
 import tkinter as tk
 from tkinter import messagebox
 
@@ -17,6 +18,9 @@ class Board:
             self.board[y, x] = player
             return True
         return False
+
+    def undo_move(self, x, y):
+        self.board[y, x] = 0
 
     def is_full(self):
         return np.all(self.board != 0)
@@ -48,55 +52,154 @@ class Board:
     def get_empty_positions(self):
         return list(zip(*np.where(self.board == 0)))
 
-# AI Player with Heuristic
+# AI Player with Minimax and Learning
 class AIPlayer:
-    def __init__(self, player_number):
+    def __init__(self, player_number, weights=None):
         self.player_number = player_number
         self.opponent_number = 1 if player_number == 2 else 2
+        self.max_depth = 2  # Depth of the minimax search
+        if weights:
+            self.weights = weights
+        else:
+            # Initialize evaluation weights
+            self.weights = {
+                'five': 100000,
+                'open_four': 10000,
+                'four': 1000,
+                'open_three': 1000,
+                'three': 100,
+                'open_two': 100,
+                'two': 10
+            }
+
+    def save_weights(self, filename='ai_weights.pkl'):
+        with open(filename, 'wb') as f:
+            pickle.dump(self.weights, f)
+
+    def load_weights(self, filename='ai_weights.pkl'):
+        try:
+            with open(filename, 'rb') as f:
+                self.weights = pickle.load(f)
+        except FileNotFoundError:
+            pass
 
     def choose_action(self, board):
-        # 1. Check for winning move
-        move = self.find_winning_move(board, self.player_number)
-        if move:
-            return move
-        # 2. Block opponent's winning move
-        move = self.find_winning_move(board, self.opponent_number)
-        if move:
-            return move
-        # 3. Choose best available move
-        return self.best_move(board)
+        _, move = self.minimax(board, self.max_depth, -float('inf'), float('inf'), True)
+        return move
 
-    def find_winning_move(self, board, player):
-        for move in board.get_empty_positions():
-            x, y = move[1], move[0]
-            board.board[y, x] = player
-            if board.check_win(player):
-                board.board[y, x] = 0
-                return move
-            board.board[y, x] = 0
-        return None
+    def minimax(self, board, depth, alpha, beta, maximizing_player):
+        if depth == 0 or board.is_full():
+            score = self.evaluate_board(board)
+            return score, None
+        if maximizing_player:
+            max_eval = -float('inf')
+            best_move = None
+            for move in self.get_candidate_moves(board):
+                x, y = move[1], move[0]
+                board.make_move(x, y, self.player_number)
+                if board.check_win(self.player_number):
+                    board.undo_move(x, y)
+                    return float('inf'), move
+                eval, _ = self.minimax(board, depth - 1, alpha, beta, False)
+                board.undo_move(x, y)
+                if eval > max_eval:
+                    max_eval = eval
+                    best_move = move
+                alpha = max(alpha, eval)
+                if beta <= alpha:
+                    break
+            return max_eval, best_move
+        else:
+            min_eval = float('inf')
+            best_move = None
+            for move in self.get_candidate_moves(board):
+                x, y = move[1], move[0]
+                board.make_move(x, y, self.opponent_number)
+                if board.check_win(self.opponent_number):
+                    board.undo_move(x, y)
+                    return -float('inf'), move
+                eval, _ = self.minimax(board, depth - 1, alpha, beta, True)
+                board.undo_move(x, y)
+                if eval < min_eval:
+                    min_eval = eval
+                    best_move = move
+                beta = min(beta, eval)
+                if beta <= alpha:
+                    break
+            return min_eval, best_move
 
-    def best_move(self, board):
-        # Simple heuristic: choose a move adjacent to existing pieces
-        empty_positions = board.get_empty_positions()
-        random.shuffle(empty_positions)
-        for move in empty_positions:
-            x, y = move[1], move[0]
-            if self.has_neighbor(board, x, y):
-                return move
-        # If no neighboring positions, pick random
-        return random.choice(empty_positions)
+    def evaluate_board(self, board):
+        # Evaluate the board from AI's perspective
+        score = 0
+        score += self.evaluate_player(board, self.player_number)
+        score -= self.evaluate_player(board, self.opponent_number)
+        return score
 
-    def has_neighbor(self, board, x, y):
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < board.size and 0 <= ny < board.size:
-                    if board.board[ny, nx] != 0:
-                        return True
-        return False
+    def evaluate_player(self, board, player):
+        total_score = 0
+        directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
+        for y in range(board.size):
+            for x in range(board.size):
+                if board.board[y, x] == player:
+                    for dx, dy in directions:
+                        total_score += self.evaluate_direction(board, x, y, dx, dy, player)
+        return total_score
+
+    def evaluate_direction(self, board, x, y, dx, dy, player):
+        consecutive = 0
+        open_ends = 0
+        score = 0
+
+        for i in range(5):
+            nx, ny = x + dx * i, y + dy * i
+            if 0 <= nx < board.size and 0 <= ny < board.size:
+                if board.board[ny, nx] == player:
+                    consecutive += 1
+                elif board.board[ny, nx] == 0:
+                    open_ends += 1
+                    break
+                else:
+                    break
+            else:
+                break
+
+        if consecutive == 5:
+            score += self.weights['five']
+        elif consecutive == 4 and open_ends == 1:
+            score += self.weights['open_four']
+        elif consecutive == 4 and open_ends == 0:
+            score += self.weights['four']
+        elif consecutive == 3 and open_ends == 1:
+            score += self.weights['open_three']
+        elif consecutive == 3 and open_ends == 0:
+            score += self.weights['three']
+        elif consecutive == 2 and open_ends == 1:
+            score += self.weights['open_two']
+        elif consecutive == 2 and open_ends == 0:
+            score += self.weights['two']
+
+        return score
+
+    def get_candidate_moves(self, board):
+        # Limit moves to positions near existing stones
+        moves = set()
+        for y in range(board.size):
+            for x in range(board.size):
+                if board.board[y, x] != 0:
+                    for dx in range(-2, 3):
+                        for dy in range(-2, 3):
+                            nx, ny = x + dx, y + dy
+                            if 0 <= nx < board.size and 0 <= ny < board.size:
+                                if board.board[ny, nx] == 0:
+                                    moves.add((ny, nx))
+        if not moves:
+            return board.get_empty_positions()
+        return list(moves)
+
+    def adjust_weights(self, reward):
+        # Adjust weights based on the reward
+        for key in self.weights:
+            self.weights[key] += reward * 0.01  # Learning rate
 
 # User Interface (UI)
 class GomokuGame:
@@ -117,6 +220,7 @@ class GomokuGame:
         self.player_number = random.choice([1, 2])
         self.board = Board()
         self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1)
+        self.ai_player.load_weights()
         self.draw_board()
         if self.player_number != 1:
             self.ai_move()
@@ -138,6 +242,8 @@ class GomokuGame:
         board = Board()
         ai_player1 = AIPlayer(player_number=1)
         ai_player2 = AIPlayer(player_number=2)
+        ai_player1.load_weights()
+        ai_player2.load_weights()
         self.self_train(ai_player1, ai_player2, num_games, board)
         messagebox.showinfo("Training Completed", f"Self-training of {num_games} games completed.")
         self.main_menu()
@@ -152,14 +258,26 @@ class GomokuGame:
                 if move:
                     board.make_move(move[1], move[0], current_player.player_number)
                     if board.check_win(current_player.player_number):
+                        # Adjust weights
+                        if current_player == ai_player1:
+                            ai_player1.adjust_weights(1)
+                            ai_player2.adjust_weights(-1)
+                        else:
+                            ai_player1.adjust_weights(-1)
+                            ai_player2.adjust_weights(1)
                         game_over = True
                     elif board.is_full():
+                        # Adjust weights for draw
+                        ai_player1.adjust_weights(0.5)
+                        ai_player2.adjust_weights(0.5)
                         game_over = True
                     else:
                         current_player = ai_player1 if current_player == ai_player2 else ai_player2
                 else:
                     game_over = True
             print(f"Game {i+1}/{num_games} completed.")
+        ai_player1.save_weights()
+        ai_player2.save_weights()
 
     def draw_board(self):
         for widget in self.root.winfo_children():
@@ -198,9 +316,13 @@ class GomokuGame:
             if self.board.make_move(x, y, self.player_number):
                 self.update_canvas()
                 if self.board.check_win(self.player_number):
+                    self.ai_player.adjust_weights(-1)
+                    self.ai_player.save_weights()
                     messagebox.showinfo("Game Over", "You win!")
                     self.main_menu()
                 elif self.board.is_full():
+                    self.ai_player.adjust_weights(0.5)
+                    self.ai_player.save_weights()
                     messagebox.showinfo("Game Over", "It's a draw!")
                     self.main_menu()
                 else:
@@ -212,12 +334,18 @@ class GomokuGame:
             self.board.make_move(move[1], move[0], self.ai_player.player_number)
             self.update_canvas()
             if self.board.check_win(self.ai_player.player_number):
+                self.ai_player.adjust_weights(1)
+                self.ai_player.save_weights()
                 messagebox.showinfo("Game Over", "AI wins!")
                 self.main_menu()
             elif self.board.is_full():
+                self.ai_player.adjust_weights(0.5)
+                self.ai_player.save_weights()
                 messagebox.showinfo("Game Over", "It's a draw!")
                 self.main_menu()
         else:
+            self.ai_player.adjust_weights(0.5)
+            self.ai_player.save_weights()
             messagebox.showinfo("Game Over", "It's a draw!")
             self.main_menu()
 
