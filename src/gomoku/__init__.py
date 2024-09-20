@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import pickle
+import threading  # Import threading for AI computations
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk  # Import ttk for Progressbar
@@ -287,19 +288,34 @@ class GomokuGame:
 
         self.root.geometry("800x600")  # Set window size
 
+        # Unbind any previous key bindings
+        self.root.unbind('p')
+        self.root.unbind('s')
+        self.root.unbind('<Return>')
+        self.root.unbind('b')
+
         # Create a frame to center the content
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
 
         tk.Label(frame, text="Welcome to Gomoku", font=("Helvetica", 24)).pack(pady=40)
-        tk.Button(frame, text="Play against AI", command=self.play_vs_ai_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
-        tk.Button(frame, text="Self Training", command=self.start_self_training, width=20, font=("Helvetica", 16)).pack(pady=20)
+        play_button = tk.Button(frame, text="Play against AI", command=self.play_vs_ai_menu, width=20, font=("Helvetica", 16))
+        play_button.pack(pady=20)
+        self.root.bind('p', lambda event: self.play_vs_ai_menu())
+
+        train_button = tk.Button(frame, text="Self Training", command=self.start_self_training, width=20, font=("Helvetica", 16))
+        train_button.pack(pady=20)
+        self.root.bind('s', lambda event: self.start_self_training())
 
     def play_vs_ai_menu(self):
         for widget in self.root.winfo_children():
             widget.destroy()
 
         self.root.geometry("800x600")  # Set window size
+
+        # Unbind previous key bindings
+        self.root.unbind('p')
+        self.root.unbind('s')
 
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
@@ -308,8 +324,13 @@ class GomokuGame:
         self.board_size_entry_ai = tk.Entry(frame, font=("Helvetica", 16))
         self.board_size_entry_ai.insert(0, "30")
         self.board_size_entry_ai.pack(pady=10)
-        tk.Button(frame, text="Start Game", command=self.start_game_vs_ai, width=20, font=("Helvetica", 16)).pack(pady=20)
-        tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
+        start_button = tk.Button(frame, text="Start Game", command=self.start_game_vs_ai, width=20, font=("Helvetica", 16))
+        start_button.pack(pady=20)
+        self.root.bind('<Return>', lambda event: self.start_game_vs_ai())
+
+        back_button = tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16))
+        back_button.pack(pady=20)
+        self.root.bind('b', lambda event: self.main_menu())
 
     def start_game_vs_ai(self):
         try:
@@ -323,6 +344,7 @@ class GomokuGame:
         self.board = Board(size=board_size)
         self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1, board_size=self.board.size)
         self.ai_player.load_weights()
+        self.is_player_turn = self.player_number == 1
         self.draw_board()
         if self.player_number != 1:
             self.ai_move()
@@ -333,6 +355,10 @@ class GomokuGame:
 
         self.root.geometry("800x600")  # Set window size
 
+        # Unbind previous key bindings
+        self.root.unbind('p')
+        self.root.unbind('s')
+
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
 
@@ -342,8 +368,13 @@ class GomokuGame:
         tk.Label(frame, text="Enter board size (e.g., 15):", font=("Helvetica", 16)).pack(pady=20)
         self.board_size_entry = tk.Entry(frame, font=("Helvetica", 16))
         self.board_size_entry.pack(pady=10)
-        tk.Button(frame, text="Start Training", command=self.run_self_training, width=20, font=("Helvetica", 16)).pack(pady=20)
-        tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16)).pack(pady=20)
+        start_button = tk.Button(frame, text="Start Training", command=self.run_self_training, width=20, font=("Helvetica", 16))
+        start_button.pack(pady=20)
+        self.root.bind('<Return>', lambda event: self.run_self_training())
+
+        back_button = tk.Button(frame, text="Back to Main Menu", command=self.main_menu, width=20, font=("Helvetica", 16))
+        back_button.pack(pady=20)
+        self.root.bind('b', lambda event: self.main_menu())
 
     def run_self_training(self):
         try:
@@ -373,10 +404,13 @@ class GomokuGame:
         self.progress['maximum'] = num_games
         self.progress['value'] = 0
 
+        # Make the progress window modal
+        self.progress_window.grab_set()
+
         self.root.after(100, self.start_training_process, args, num_games, ai_weights_file)
 
     def start_training_process(self, args, num_games, ai_weights_file):
-        pool = Pool(processes=cpu_count())
+        self.pool = Pool(processes=cpu_count())
         self.results = []
         self.num_completed = 0
 
@@ -387,12 +421,12 @@ class GomokuGame:
             # Update the progress bar
             self.progress_window.update_idletasks()
             if self.num_completed == num_games:
-                pool.close()
-                pool.join()
+                self.pool.close()
+                self.pool.join()
                 self.finalize_training(ai_weights_file)
 
         for arg in args:
-            pool.apply_async(run_training_game, args=(arg,), callback=collect_result)
+            self.pool.apply_async(run_training_game, args=(arg,), callback=collect_result)
 
     def finalize_training(self, ai_weights_file):
         # Aggregate the weights
@@ -467,6 +501,8 @@ class GomokuGame:
                         fill=color, tags="piece")
 
     def human_move(self, event):
+        if not self.is_player_turn:
+            return
         x = int(round((event.x - self.cell_size // 2) / self.cell_size))
         y = int(round((event.y - self.cell_size // 2) / self.cell_size))
         if 0 <= x < self.board.size and 0 <= y < self.board.size:
@@ -485,14 +521,23 @@ class GomokuGame:
                     self.main_menu()
                     return
                 else:
+                    self.is_player_turn = False
                     self.ai_move()
         else:
             messagebox.showwarning("Invalid Move", "Please click within the board.")
 
     def ai_move(self):
+        self.is_player_turn = False
         self.root.title("AI's Turn")
         self.root.update_idletasks()
-        move = self.ai_player.choose_action(self.board)
+
+        def compute_move():
+            move = self.ai_player.choose_action(self.board)
+            self.root.after(0, lambda: self.process_ai_move(move))
+
+        threading.Thread(target=compute_move).start()
+
+    def process_ai_move(self, move):
         if move:
             self.board.make_move(move[1], move[0], self.ai_player.player_number)
             self.update_canvas()
@@ -514,6 +559,7 @@ class GomokuGame:
             messagebox.showinfo("Game Over", "It's a draw!")
             self.main_menu()
             return
+        self.is_player_turn = True
         self.root.title("Your Turn")
 
 def main():
