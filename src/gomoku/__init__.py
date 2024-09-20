@@ -1,6 +1,5 @@
 import numpy as np
 import random
-import pickle
 import tkinter as tk
 from tkinter import messagebox
 
@@ -49,109 +48,55 @@ class Board:
     def get_empty_positions(self):
         return list(zip(*np.where(self.board == 0)))
 
-# AI Player with Learning Capability
+# AI Player with Heuristic
 class AIPlayer:
-    def __init__(self, player_number, q_table=None):
+    def __init__(self, player_number):
         self.player_number = player_number
         self.opponent_number = 1 if player_number == 2 else 2
-        self.q_table = q_table if q_table is not None else {}
-        self.epsilon = 0.1  # Exploration rate
-
-    def get_state_key(self, board):
-        return tuple(board.board.flatten())
 
     def choose_action(self, board):
-        state_key = self.get_state_key(board)
-        if state_key not in self.q_table:
-            self.q_table[state_key] = {}
-
-        empty_positions = board.get_empty_positions()
-        if empty_positions:
-            # Exploration vs. Exploitation
-            if random.random() < self.epsilon:  # Exploration
-                move = random.choice(empty_positions)
-            else:
-                # Exploitation: choose the best known move
-                q_values = self.q_table[state_key]
-                if q_values:
-                    # Get the action with the highest Q-value
-                    move = max(q_values, key=q_values.get)
-                    if move not in empty_positions:
-                        move = random.choice(empty_positions)
-                else:
-                    move = random.choice(empty_positions)
+        # 1. Check for winning move
+        move = self.find_winning_move(board, self.player_number)
+        if move:
             return move
-        else:
-            return None
+        # 2. Block opponent's winning move
+        move = self.find_winning_move(board, self.opponent_number)
+        if move:
+            return move
+        # 3. Choose best available move
+        return self.best_move(board)
 
-    def update_q_table(self, history, reward):
-        # Simple Q-learning update
-        learning_rate = 0.1
-        discount_factor = 0.9
-        next_max = 0
-        for state, action in reversed(history):
-            state_key = state
-            if state_key not in self.q_table:
-                self.q_table[state_key] = {}
-            if action not in self.q_table[state_key]:
-                self.q_table[state_key][action] = 0
-            # Q-learning formula
-            old_value = self.q_table[state_key][action]
-            self.q_table[state_key][action] = old_value + learning_rate * (discount_factor * next_max - old_value)
-            next_max = max(self.q_table[state_key].values())
-        # Update the first move with the final reward
-        first_state, first_action = history[-1]
-        self.q_table[first_state][first_action] += learning_rate * (reward - self.q_table[first_state][first_action])
+    def find_winning_move(self, board, player):
+        for move in board.get_empty_positions():
+            x, y = move[1], move[0]
+            board.board[y, x] = player
+            if board.check_win(player):
+                board.board[y, x] = 0
+                return move
+            board.board[y, x] = 0
+        return None
 
-    def save_q_table(self, filename):
-        with open(filename, 'wb') as f:
-            pickle.dump(self.q_table, f)
+    def best_move(self, board):
+        # Simple heuristic: choose a move adjacent to existing pieces
+        empty_positions = board.get_empty_positions()
+        random.shuffle(empty_positions)
+        for move in empty_positions:
+            x, y = move[1], move[0]
+            if self.has_neighbor(board, x, y):
+                return move
+        # If no neighboring positions, pick random
+        return random.choice(empty_positions)
 
-    def load_q_table(self, filename):
-        try:
-            with open(filename, 'rb') as f:
-                self.q_table = pickle.load(f)
-        except FileNotFoundError:
-            self.q_table = {}
-
-# Self-Training Mechanism
-def self_train(ai_player1, ai_player2, num_games, board, q_table_file):
-    for i in range(num_games):
-        board.reset()
-        history_p1 = []
-        history_p2 = []
-        current_player = ai_player1
-        other_player = ai_player2
-        game_over = False
-        while not game_over:
-            move = current_player.choose_action(board)
-            if move:
-                board.make_move(move[1], move[0], current_player.player_number)
-                state_key = current_player.get_state_key(board)
-                if current_player.player_number == ai_player1.player_number:
-                    history_p1.append((state_key, move))
-                else:
-                    history_p2.append((state_key, move))
-                if board.check_win(current_player.player_number):
-                    # Current player wins
-                    current_player.update_q_table(history_p1 if current_player == ai_player1 else history_p2, reward=1)
-                    other_player.update_q_table(history_p2 if other_player == ai_player1 else history_p1, reward=-1)
-                    game_over = True
-                elif board.is_full():
-                    # Draw
-                    current_player.update_q_table(history_p1 if current_player == ai_player1 else history_p2, reward=0)
-                    other_player.update_q_table(history_p2 if other_player == ai_player1 else history_p1, reward=0)
-                    game_over = True
-                else:
-                    # Switch players
-                    current_player, other_player = other_player, current_player
-            else:
-                # No moves left
-                game_over = True
-        print(f"Game {i+1}/{num_games} completed.")
-    # Save Q-tables
-    ai_player1.save_q_table(q_table_file)
-    ai_player2.save_q_table(q_table_file)
+    def has_neighbor(self, board, x, y):
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < board.size and 0 <= ny < board.size:
+                    if board.board[ny, nx] != 0:
+                        return True
+        return False
 
 # User Interface (UI)
 class GomokuGame:
@@ -172,8 +117,6 @@ class GomokuGame:
         self.player_number = random.choice([1, 2])
         self.board = Board()
         self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1)
-        self.ai_player.load_q_table('q_table.pkl')
-        self.history = []
         self.draw_board()
         if self.player_number != 1:
             self.ai_move()
@@ -195,11 +138,28 @@ class GomokuGame:
         board = Board()
         ai_player1 = AIPlayer(player_number=1)
         ai_player2 = AIPlayer(player_number=2)
-        ai_player1.load_q_table('q_table.pkl')
-        ai_player2.load_q_table('q_table.pkl')
-        self_train(ai_player1, ai_player2, num_games, board, 'q_table.pkl')
+        self.self_train(ai_player1, ai_player2, num_games, board)
         messagebox.showinfo("Training Completed", f"Self-training of {num_games} games completed.")
         self.main_menu()
+
+    def self_train(self, ai_player1, ai_player2, num_games, board):
+        for i in range(num_games):
+            board.reset()
+            current_player = ai_player1 if random.choice([True, False]) else ai_player2
+            game_over = False
+            while not game_over:
+                move = current_player.choose_action(board)
+                if move:
+                    board.make_move(move[1], move[0], current_player.player_number)
+                    if board.check_win(current_player.player_number):
+                        game_over = True
+                    elif board.is_full():
+                        game_over = True
+                    else:
+                        current_player = ai_player1 if current_player == ai_player2 else ai_player2
+                else:
+                    game_over = True
+            print(f"Game {i+1}/{num_games} completed.")
 
     def draw_board(self):
         for widget in self.root.winfo_children():
@@ -224,25 +184,24 @@ class GomokuGame:
                 piece = self.board.board[y, x]
                 if piece != 0:
                     color = 'black' if piece == 1 else 'white'
-                    self.canvas.create_oval(10 + x*40, 10 + y*40, 30 + x*40, 30 + y*40, fill=color, tags="piece")
+                    center_x = 20 + x*40
+                    center_y = 20 + y*40
+                    self.canvas.create_oval(
+                        center_x - 15, center_y - 15,
+                        center_x + 15, center_y + 15,
+                        fill=color, tags="piece")
 
     def human_move(self, event):
-        x = (event.x - 20) // 40
-        y = (event.y - 20) // 40
+        x = round((event.x - 20) / 40)
+        y = round((event.y - 20) / 40)
         if 0 <= x < self.board.size and 0 <= y < self.board.size:
             if self.board.make_move(x, y, self.player_number):
                 self.update_canvas()
-                state_key = tuple(self.board.board.flatten())
-                self.history.append((state_key, (y, x)))
                 if self.board.check_win(self.player_number):
-                    self.ai_player.update_q_table(self.history, reward=-1)
                     messagebox.showinfo("Game Over", "You win!")
-                    self.ai_player.save_q_table('q_table.pkl')
                     self.main_menu()
                 elif self.board.is_full():
-                    self.ai_player.update_q_table(self.history, reward=0)
                     messagebox.showinfo("Game Over", "It's a draw!")
-                    self.ai_player.save_q_table('q_table.pkl')
                     self.main_menu()
                 else:
                     self.ai_move()
@@ -252,22 +211,14 @@ class GomokuGame:
         if move:
             self.board.make_move(move[1], move[0], self.ai_player.player_number)
             self.update_canvas()
-            state_key = tuple(self.board.board.flatten())
-            self.history.append((state_key, move))
             if self.board.check_win(self.ai_player.player_number):
-                self.ai_player.update_q_table(self.history, reward=1)
                 messagebox.showinfo("Game Over", "AI wins!")
-                self.ai_player.save_q_table('q_table.pkl')
                 self.main_menu()
             elif self.board.is_full():
-                self.ai_player.update_q_table(self.history, reward=0)
                 messagebox.showinfo("Game Over", "It's a draw!")
-                self.ai_player.save_q_table('q_table.pkl')
                 self.main_menu()
         else:
-            self.ai_player.update_q_table(self.history, reward=0)
             messagebox.showinfo("Game Over", "It's a draw!")
-            self.ai_player.save_q_table('q_table.pkl')
             self.main_menu()
 
 def main():
