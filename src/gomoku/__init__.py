@@ -3,12 +3,15 @@ import random
 import pickle
 import tkinter as tk
 from tkinter import messagebox
+from multiprocessing import Pool, cpu_count
+import os
 
 # Game Logic
 class Board:
     def __init__(self, size=15):
         self.size = size
         self.board = np.zeros((size, size), dtype=int)  # 0-empty, 1-player1, 2-player2
+        self.center = size // 2
 
     def reset(self):
         self.board = np.zeros((self.size, self.size), dtype=int)
@@ -29,11 +32,12 @@ class Board:
         # Check horizontal, vertical, and diagonal lines for a win
         for y in range(self.size):
             for x in range(self.size):
-                if self.check_line(x, y, 1, 0, player) \
-                   or self.check_line(x, y, 0, 1, player) \
-                   or self.check_line(x, y, 1, 1, player) \
-                   or self.check_line(x, y, 1, -1, player):
-                    return True
+                if self.board[y, x] == player:
+                    if self.check_line(x, y, 1, 0, player) \
+                       or self.check_line(x, y, 0, 1, player) \
+                       or self.check_line(x, y, 1, 1, player) \
+                       or self.check_line(x, y, 1, -1, player):
+                        return True
         return False
 
     def check_line(self, x, y, dx, dy, player):
@@ -52,12 +56,17 @@ class Board:
     def get_empty_positions(self):
         return list(zip(*np.where(self.board == 0)))
 
+    def is_empty(self):
+        return np.all(self.board == 0)
+
 # AI Player with Minimax and Learning
 class AIPlayer:
-    def __init__(self, player_number, weights=None):
+    def __init__(self, player_number, weights=None, max_depth=2):
         self.player_number = player_number
         self.opponent_number = 1 if player_number == 2 else 2
-        self.max_depth = 2  # Depth of the minimax search
+        self.max_depth = max_depth  # Depth of the minimax search
+        self.board_size = 15
+        self.center = self.board_size // 2
         if weights:
             self.weights = weights
         else:
@@ -66,11 +75,27 @@ class AIPlayer:
                 'five': 100000,
                 'open_four': 10000,
                 'four': 1000,
-                'open_three': 1000,
+                'open_three': 500,
                 'three': 100,
-                'open_two': 100,
+                'open_two': 50,
                 'two': 10
             }
+        # Positional weight matrix favoring center positions
+        self.position_weights = self.create_position_weights()
+
+    def create_position_weights(self):
+        center = self.board_size / 2
+        weights = np.zeros((self.board_size, self.board_size))
+        for y in range(self.board_size):
+            for x in range(self.board_size):
+                # The further from the center, the lower the weight
+                distance = np.sqrt((x - center + 0.5) ** 2 + (y - center + 0.5) ** 2)
+                weights[y, x] = 1 / (1 + distance)
+        # Normalize weights to range between 1 and 2
+        min_w = np.min(weights)
+        max_w = np.max(weights)
+        weights = 1 + (weights - min_w) / (max_w - min_w)
+        return weights
 
     def save_weights(self, filename='ai_weights.pkl'):
         with open(filename, 'wb') as f:
@@ -84,6 +109,9 @@ class AIPlayer:
             pass
 
     def choose_action(self, board):
+        if board.is_empty():
+            # Place the first move in the center
+            return (board.center, board.center)
         _, move = self.minimax(board, self.max_depth, -float('inf'), float('inf'), True)
         return move
 
@@ -141,16 +169,17 @@ class AIPlayer:
         for y in range(board.size):
             for x in range(board.size):
                 if board.board[y, x] == player:
+                    position_weight = self.position_weights[y, x]
                     for dx, dy in directions:
-                        total_score += self.evaluate_direction(board, x, y, dx, dy, player)
+                        total_score += self.evaluate_direction(board, x, y, dx, dy, player) * position_weight
         return total_score
 
     def evaluate_direction(self, board, x, y, dx, dy, player):
         consecutive = 0
         open_ends = 0
         score = 0
-
-        for i in range(5):
+        # Positive direction
+        for i in range(1, 5):
             nx, ny = x + dx * i, y + dy * i
             if 0 <= nx < board.size and 0 <= ny < board.size:
                 if board.board[ny, nx] == player:
@@ -162,22 +191,33 @@ class AIPlayer:
                     break
             else:
                 break
-
-        if consecutive == 5:
+        # Negative direction
+        for i in range(1, 5):
+            nx, ny = x - dx * i, y - dy * i
+            if 0 <= nx < board.size and 0 <= ny < board.size:
+                if board.board[ny, nx] == player:
+                    consecutive += 1
+                elif board.board[ny, nx] == 0:
+                    open_ends += 1
+                    break
+                else:
+                    break
+            else:
+                break
+        if consecutive >= 5:
             score += self.weights['five']
-        elif consecutive == 4 and open_ends == 1:
+        elif consecutive == 4 and open_ends == 2:
             score += self.weights['open_four']
-        elif consecutive == 4 and open_ends == 0:
+        elif consecutive == 4 and open_ends == 1:
             score += self.weights['four']
-        elif consecutive == 3 and open_ends == 1:
+        elif consecutive == 3 and open_ends == 2:
             score += self.weights['open_three']
-        elif consecutive == 3 and open_ends == 0:
+        elif consecutive == 3 and open_ends == 1:
             score += self.weights['three']
-        elif consecutive == 2 and open_ends == 1:
+        elif consecutive == 2 and open_ends == 2:
             score += self.weights['open_two']
-        elif consecutive == 2 and open_ends == 0:
+        elif consecutive == 2 and open_ends == 1:
             score += self.weights['two']
-
         return score
 
     def get_candidate_moves(self, board):
@@ -200,6 +240,38 @@ class AIPlayer:
         # Adjust weights based on the reward
         for key in self.weights:
             self.weights[key] += reward * 0.01  # Learning rate
+
+# Function to run a single self-training game (used for multiprocessing)
+def run_training_game(args):
+    ai_player1_weights, ai_player2_weights = args
+    board = Board()
+    ai_player1 = AIPlayer(player_number=1, weights=ai_player1_weights, max_depth=1)
+    ai_player2 = AIPlayer(player_number=2, weights=ai_player2_weights, max_depth=1)
+    current_player = ai_player1 if random.choice([True, False]) else ai_player2
+    game_over = False
+    while not game_over:
+        move = current_player.choose_action(board)
+        if move:
+            board.make_move(move[1], move[0], current_player.player_number)
+            if board.check_win(current_player.player_number):
+                # Adjust weights
+                if current_player == ai_player1:
+                    ai_player1.adjust_weights(1)
+                    ai_player2.adjust_weights(-1)
+                else:
+                    ai_player1.adjust_weights(-1)
+                    ai_player2.adjust_weights(1)
+                game_over = True
+            elif board.is_full():
+                # Adjust weights for draw
+                ai_player1.adjust_weights(0.5)
+                ai_player2.adjust_weights(0.5)
+                game_over = True
+            else:
+                current_player = ai_player1 if current_player == ai_player2 else ai_player2
+        else:
+            game_over = True
+    return ai_player1.weights, ai_player2.weights
 
 # User Interface (UI)
 class GomokuGame:
@@ -239,45 +311,41 @@ class GomokuGame:
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number.")
             return
-        board = Board()
-        ai_player1 = AIPlayer(player_number=1)
-        ai_player2 = AIPlayer(player_number=2)
-        ai_player1.load_weights()
-        ai_player2.load_weights()
-        self.self_train(ai_player1, ai_player2, num_games, board)
+
+        ai_weights_file = 'ai_weights.pkl'
+        if os.path.exists(ai_weights_file):
+            with open(ai_weights_file, 'rb') as f:
+                ai_weights = pickle.load(f)
+        else:
+            ai_weights = None
+
+        # Prepare arguments for multiprocessing
+        args = [(ai_weights, ai_weights) for _ in range(num_games)]
+
+        pool = Pool(processes=cpu_count())
+        results = pool.map(run_training_game, args)
+        pool.close()
+        pool.join()
+
+        # Aggregate the weights
+        ai_player1_weights = results[0][0]
+        ai_player2_weights = results[0][1]
+        for weights_p1, weights_p2 in results[1:]:
+            for key in ai_player1_weights:
+                ai_player1_weights[key] += weights_p1[key]
+                ai_player2_weights[key] += weights_p2[key]
+
+        # Average the weights
+        for key in ai_player1_weights:
+            ai_player1_weights[key] /= num_games
+            ai_player2_weights[key] /= num_games
+
+        # Save the updated weights
+        with open(ai_weights_file, 'wb') as f:
+            pickle.dump(ai_player1_weights, f)
+
         messagebox.showinfo("Training Completed", f"Self-training of {num_games} games completed.")
         self.main_menu()
-
-    def self_train(self, ai_player1, ai_player2, num_games, board):
-        for i in range(num_games):
-            board.reset()
-            current_player = ai_player1 if random.choice([True, False]) else ai_player2
-            game_over = False
-            while not game_over:
-                move = current_player.choose_action(board)
-                if move:
-                    board.make_move(move[1], move[0], current_player.player_number)
-                    if board.check_win(current_player.player_number):
-                        # Adjust weights
-                        if current_player == ai_player1:
-                            ai_player1.adjust_weights(1)
-                            ai_player2.adjust_weights(-1)
-                        else:
-                            ai_player1.adjust_weights(-1)
-                            ai_player2.adjust_weights(1)
-                        game_over = True
-                    elif board.is_full():
-                        # Adjust weights for draw
-                        ai_player1.adjust_weights(0.5)
-                        ai_player2.adjust_weights(0.5)
-                        game_over = True
-                    else:
-                        current_player = ai_player1 if current_player == ai_player2 else ai_player2
-                else:
-                    game_over = True
-            print(f"Game {i+1}/{num_games} completed.")
-        ai_player1.save_weights()
-        ai_player2.save_weights()
 
     def draw_board(self):
         for widget in self.root.winfo_children():
