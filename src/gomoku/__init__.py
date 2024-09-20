@@ -3,6 +3,7 @@ import random
 import pickle
 import tkinter as tk
 from tkinter import messagebox
+from tkinter import ttk  # Import ttk for Progressbar
 from multiprocessing import Pool, cpu_count
 import os
 
@@ -61,11 +62,11 @@ class Board:
 
 # AI Player with Minimax and Learning
 class AIPlayer:
-    def __init__(self, player_number, weights=None, max_depth=2):
+    def __init__(self, player_number, board_size=15, weights=None, max_depth=2):
         self.player_number = player_number
         self.opponent_number = 1 if player_number == 2 else 2
         self.max_depth = max_depth  # Depth of the minimax search
-        self.board_size = 15
+        self.board_size = board_size
         self.center = self.board_size // 2
         if weights:
             self.weights = weights
@@ -243,10 +244,10 @@ class AIPlayer:
 
 # Function to run a single self-training game (used for multiprocessing)
 def run_training_game(args):
-    ai_player1_weights, ai_player2_weights = args
-    board = Board()
-    ai_player1 = AIPlayer(player_number=1, weights=ai_player1_weights, max_depth=1)
-    ai_player2 = AIPlayer(player_number=2, weights=ai_player2_weights, max_depth=1)
+    ai_player1_weights, ai_player2_weights, board_size = args
+    board = Board(size=board_size)
+    ai_player1 = AIPlayer(player_number=1, board_size=board_size, weights=ai_player1_weights, max_depth=1)
+    ai_player2 = AIPlayer(player_number=2, board_size=board_size, weights=ai_player2_weights, max_depth=1)
     current_player = ai_player1 if random.choice([True, False]) else ai_player2
     game_over = False
     while not game_over:
@@ -290,8 +291,8 @@ class GomokuGame:
 
     def start_game_vs_ai(self):
         self.player_number = random.choice([1, 2])
-        self.board = Board()
-        self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1)
+        self.board = Board(size=15)  # You can change the board size here
+        self.ai_player = AIPlayer(player_number=2 if self.player_number == 1 else 1, board_size=self.board.size)
         self.ai_player.load_weights()
         self.draw_board()
         if self.player_number != 1:
@@ -303,13 +304,17 @@ class GomokuGame:
         tk.Label(self.root, text="Enter number of games for self-training:", font=("Helvetica", 12)).pack(pady=10)
         self.num_games_entry = tk.Entry(self.root)
         self.num_games_entry.pack(pady=5)
+        tk.Label(self.root, text="Enter board size (e.g., 15):", font=("Helvetica", 12)).pack(pady=10)
+        self.board_size_entry = tk.Entry(self.root)
+        self.board_size_entry.pack(pady=5)
         tk.Button(self.root, text="Start Training", command=self.run_self_training).pack(pady=10)
 
     def run_self_training(self):
         try:
             num_games = int(self.num_games_entry.get())
+            board_size = int(self.board_size_entry.get())
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter a valid number.")
+            messagebox.showerror("Invalid Input", "Please enter valid numbers.")
             return
 
         ai_weights_file = 'ai_weights.pkl'
@@ -320,22 +325,47 @@ class GomokuGame:
             ai_weights = None
 
         # Prepare arguments for multiprocessing
-        args = [(ai_weights, ai_weights) for _ in range(num_games)]
+        args = [(ai_weights, ai_weights, board_size) for _ in range(num_games)]
 
+        self.progress_window = tk.Toplevel(self.root)
+        self.progress_window.title("Training Progress")
+        tk.Label(self.progress_window, text="Training in progress...").pack(pady=10)
+        self.progress = ttk.Progressbar(self.progress_window, orient=tk.HORIZONTAL, length=300, mode='determinate')
+        self.progress.pack(pady=10)
+        self.progress['maximum'] = num_games
+        self.progress['value'] = 0
+
+        self.root.after(100, self.start_training_process, args, num_games, ai_weights_file)
+
+    def start_training_process(self, args, num_games, ai_weights_file):
         pool = Pool(processes=cpu_count())
-        results = pool.map(run_training_game, args)
-        pool.close()
-        pool.join()
+        self.results = []
+        self.num_completed = 0
 
+        def collect_result(result):
+            self.results.append(result)
+            self.num_completed += 1
+            self.progress['value'] = self.num_completed
+            self.progress_window.update()
+            if self.num_completed == num_games:
+                pool.close()
+                pool.join()
+                self.finalize_training(ai_weights_file)
+
+        for arg in args:
+            pool.apply_async(run_training_game, args=(arg,), callback=collect_result)
+
+    def finalize_training(self, ai_weights_file):
         # Aggregate the weights
-        ai_player1_weights = results[0][0]
-        ai_player2_weights = results[0][1]
-        for weights_p1, weights_p2 in results[1:]:
+        ai_player1_weights = self.results[0][0]
+        ai_player2_weights = self.results[0][1]
+        for weights_p1, weights_p2 in self.results[1:]:
             for key in ai_player1_weights:
                 ai_player1_weights[key] += weights_p1[key]
                 ai_player2_weights[key] += weights_p2[key]
 
         # Average the weights
+        num_games = len(self.results)
         for key in ai_player1_weights:
             ai_player1_weights[key] /= num_games
             ai_player2_weights[key] /= num_games
@@ -344,13 +374,16 @@ class GomokuGame:
         with open(ai_weights_file, 'wb') as f:
             pickle.dump(ai_player1_weights, f)
 
+        self.progress_window.destroy()
         messagebox.showinfo("Training Completed", f"Self-training of {num_games} games completed.")
         self.main_menu()
 
     def draw_board(self):
         for widget in self.root.winfo_children():
             widget.destroy()
-        self.canvas = tk.Canvas(self.root, width=600, height=600)
+        canvas_size = 600
+        self.cell_size = canvas_size // self.board.size
+        self.canvas = tk.Canvas(self.root, width=canvas_size, height=canvas_size)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self.human_move)
         self.draw_grid()
@@ -359,9 +392,17 @@ class GomokuGame:
     def draw_grid(self):
         for i in range(self.board.size):
             # Vertical lines
-            self.canvas.create_line(20 + i*40, 20, 20 + i*40, 580)
+            self.canvas.create_line(
+                self.cell_size // 2 + i * self.cell_size,
+                self.cell_size // 2,
+                self.cell_size // 2 + i * self.cell_size,
+                self.cell_size // 2 + (self.board.size - 1) * self.cell_size)
             # Horizontal lines
-            self.canvas.create_line(20, 20 + i*40, 580, 20 + i*40)
+            self.canvas.create_line(
+                self.cell_size // 2,
+                self.cell_size // 2 + i * self.cell_size,
+                self.cell_size // 2 + (self.board.size - 1) * self.cell_size,
+                self.cell_size // 2 + i * self.cell_size)
 
     def update_canvas(self):
         self.canvas.delete("piece")
@@ -370,16 +411,17 @@ class GomokuGame:
                 piece = self.board.board[y, x]
                 if piece != 0:
                     color = 'black' if piece == 1 else 'white'
-                    center_x = 20 + x*40
-                    center_y = 20 + y*40
+                    center_x = self.cell_size // 2 + x * self.cell_size
+                    center_y = self.cell_size // 2 + y * self.cell_size
+                    radius = self.cell_size // 2 - 2
                     self.canvas.create_oval(
-                        center_x - 15, center_y - 15,
-                        center_x + 15, center_y + 15,
+                        center_x - radius, center_y - radius,
+                        center_x + radius, center_y + radius,
                         fill=color, tags="piece")
 
     def human_move(self, event):
-        x = round((event.x - 20) / 40)
-        y = round((event.y - 20) / 40)
+        x = round((event.x - self.cell_size // 2) / self.cell_size)
+        y = round((event.y - self.cell_size // 2) / self.cell_size)
         if 0 <= x < self.board.size and 0 <= y < self.board.size:
             if self.board.make_move(x, y, self.player_number):
                 self.update_canvas()
