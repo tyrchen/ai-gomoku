@@ -578,7 +578,7 @@ class GomokuGame:
         else:
             self.ai_player.adjust_weights(0.5)
             self.ai_player.save_weights()
-            messagebox.showinfo("Game Over", "It's a draw!")
+            messagebox.showinfo("Game Over", "You win!")
             self.main_menu()
             return
         self.is_player_turn = True
