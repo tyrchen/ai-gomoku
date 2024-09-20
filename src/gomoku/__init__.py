@@ -245,35 +245,39 @@ class AIPlayer:
 
 # Function to run a single self-training game (used for multiprocessing)
 def run_training_game(args):
-    ai_player1_weights, ai_player2_weights, board_size = args
-    board = Board(size=board_size)
-    ai_player1 = AIPlayer(player_number=1, board_size=board_size, weights=ai_player1_weights, max_depth=1)
-    ai_player2 = AIPlayer(player_number=2, board_size=board_size, weights=ai_player2_weights, max_depth=1)
-    current_player = ai_player1 if random.choice([True, False]) else ai_player2
-    game_over = False
-    while not game_over:
-        move = current_player.choose_action(board)
-        if move:
-            board.make_move(move[1], move[0], current_player.player_number)
-            if board.check_win(current_player.player_number):
-                # Adjust weights
-                if current_player == ai_player1:
-                    ai_player1.adjust_weights(1)
-                    ai_player2.adjust_weights(-1)
+    try:
+        ai_player1_weights, ai_player2_weights, board_size = args
+        board = Board(size=board_size)
+        ai_player1 = AIPlayer(player_number=1, board_size=board_size, weights=ai_player1_weights, max_depth=1)
+        ai_player2 = AIPlayer(player_number=2, board_size=board_size, weights=ai_player2_weights, max_depth=1)
+        current_player = ai_player1 if random.choice([True, False]) else ai_player2
+        game_over = False
+        while not game_over:
+            move = current_player.choose_action(board)
+            if move:
+                board.make_move(move[1], move[0], current_player.player_number)
+                if board.check_win(current_player.player_number):
+                    # Adjust weights
+                    if current_player == ai_player1:
+                        ai_player1.adjust_weights(1)
+                        ai_player2.adjust_weights(-1)
+                    else:
+                        ai_player1.adjust_weights(-1)
+                        ai_player2.adjust_weights(1)
+                    game_over = True
+                elif board.is_full():
+                    # Adjust weights for draw
+                    ai_player1.adjust_weights(0.5)
+                    ai_player2.adjust_weights(0.5)
+                    game_over = True
                 else:
-                    ai_player1.adjust_weights(-1)
-                    ai_player2.adjust_weights(1)
-                game_over = True
-            elif board.is_full():
-                # Adjust weights for draw
-                ai_player1.adjust_weights(0.5)
-                ai_player2.adjust_weights(0.5)
-                game_over = True
+                    current_player = ai_player1 if current_player == ai_player2 else ai_player2
             else:
-                current_player = ai_player1 if current_player == ai_player2 else ai_player2
-        else:
-            game_over = True
-    return ai_player1.weights, ai_player2.weights
+                game_over = True
+        return ai_player1.weights, ai_player2.weights
+    except Exception as e:
+        # Return the exception to the main process
+        return e
 
 # User Interface (UI)
 class GomokuGame:
@@ -410,25 +414,43 @@ class GomokuGame:
         self.root.after(100, self.start_training_process, args, num_games, ai_weights_file)
 
     def start_training_process(self, args, num_games, ai_weights_file):
+        print("start_training_process")
         self.pool = Pool(processes=cpu_count())
         self.results = []
         self.num_completed = 0
+        self.error_occurred = False  # Flag to check for errors
 
         def collect_result(result):
+            if isinstance(result, Exception):
+                # Handle the exception
+                messagebox.showerror("Error", f"An error occurred during training: {result}")
+                self.pool.terminate()
+                self.pool.join()
+                self.progress_window.destroy()
+                self.main_menu()
+                self.error_occurred = True
+                return
+
             self.results.append(result)
             self.num_completed += 1
             self.progress['value'] = self.num_completed
             # Update the progress bar
             self.progress_window.update_idletasks()
+            print(f"num_completed: {self.num_completed}, num_games: {num_games}")
             if self.num_completed == num_games:
                 self.pool.close()
-                self.pool.join()
-                self.finalize_training(ai_weights_file)
+                print("self.pool.close()")
+                if not self.error_occurred:
+                    self.finalize_training(ai_weights_file)
 
         for arg in args:
             self.pool.apply_async(run_training_game, args=(arg,), callback=collect_result)
 
+        # Close the pool when all tasks are done
+        self.pool.close()
+
     def finalize_training(self, ai_weights_file):
+        print("finalize_training")
         # Aggregate the weights
         ai_player1_weights = self.results[0][0]
         ai_player2_weights = self.results[0][1]
